@@ -24,7 +24,7 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 # ❗ Change this if your bucket has a different name
-BUCKET = "step2-files"
+BUCKET = "Test1"
 
 # ---------------- Calculator ----------------
 with st.form("calc_form", clear_on_submit=False):
