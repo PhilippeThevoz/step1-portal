@@ -7,6 +7,7 @@ def download_users_json(supabase, bucket: str, object_path: str) -> Optional[byt
     """
     try:
         blob = supabase.storage.from_(bucket).download(object_path)
+        print("download_user_json")
         if isinstance(blob, (bytes, bytearray)):
             return bytes(blob)
         if isinstance(blob, dict) and "data" in blob:
