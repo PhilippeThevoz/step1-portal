@@ -29,12 +29,6 @@ BUCKET = "Test1"           # storage bucket name
 OBJECT_PATH = "Users.json" # file path inside the bucket
 
 # ---------- Helpers ----------
-def _serialize_date(d: date | None) -> str | None:
-    return d.isoformat() if isinstance(d, date) else None
-
-def _now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
 def _download_users_json() -> bytes | None:
     """Return the Users.json bytes if present, else None."""
     try:
@@ -55,17 +49,15 @@ def _remove_users_json_if_exists():
         pass  # ignore if it doesn't exist
 
 def _upload_users_json(records: list[dict]):
-    """Write the entire list to Users.json (overwrite). Use BytesIO for safety."""
+    """Write the entire list to Users.json (overwrite)."""
     data_bytes = json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
-    file_obj = io.BytesIO(data_bytes)  # <- file-like object prevents .encode() mishaps
-    _remove_users_json_if_exists()
-    # Use 'contentType' (camelCase) to match client expectations
+    _remove_users_json_if_exists()  # avoid using upsert
     supabase.storage.from_(BUCKET).upload(
         OBJECT_PATH,
-        file_obj,
-        {"contentType": "application/json; charset=utf-8"}
+        data_bytes,
+        {"contentType": "application/json; charset=utf-8"},
     )
-
+    
 def _load_users_as_list() -> list[dict]:
     """Load Users.json as list; return [] if missing/invalid."""
     raw = _download_users_json()
@@ -93,11 +85,11 @@ with st.form("onboarding_form", clear_on_submit=False):
     st.subheader("User information")
 
     name = st.text_input("Name", key="name")
-    birth_date = st.date_input("Birth Date", key="birth_date", value=None, format="YYYY-MM-DD")
+    birth_date = st.text_input("Birth Date", key="birth_date")
     nationality = st.text_input("Nationality", key="nationality")
-    address = st.text_area("Address", key="address", placeholder="Street, ZIP, City, Country")
-    email = st.text_input("email", key="email", placeholder="name@example.com")
-    mobile = st.text_input("mobile phone number", key="mobile", placeholder="+41 79 123 45 67")
+    address = st.text_area("Address", key="address")
+    email = st.text_input("email", key="email")
+    mobile = st.text_input("mobile phone number", key="mobile")
 
     c1, c2 = st.columns(2)
     with c1:

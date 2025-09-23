@@ -1,0 +1,11 @@
+(
+	{
+		"timestamp_utc": "now",
+		"name": "PHT",
+		"birth_date": "2025-02-02",
+		"nationality": "CH",
+		"address": "ici",
+		"email": "philippe@thevoz.org",
+		"mobile": +41794092730"
+	}
+)
