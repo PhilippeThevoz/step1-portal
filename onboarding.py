@@ -130,7 +130,7 @@ if send_email_clicked:
                 "host": st.secrets.get("SMTP_HOST") or os.getenv("SMTP_HOST"),
                 "port": int(st.secrets.get("SMTP_PORT", os.getenv("SMTP_PORT") or 587)),
                 "username": st.secrets.get("SMTP_USERNAME") or os.getenv("SMTP_USERNAME"),
-                "password": st.secrets.get("SMTP_PASSWORD") or os.getenv("SMTP_PASSWORD"),
+                "password": st.secrets.get("BLUEWIN_SMTP_PASSWORD") or os.getenv("BLUEWIN_SMTP_PASSWORD"),
                 "sender_email": st.secrets.get("SENDER_EMAIL") or os.getenv("SENDER_EMAIL"),
                 "sender_name": st.secrets.get("SENDER_NAME") or os.getenv("SENDER_NAME") or "Your Team",
                 "use_ssl": str(st.secrets.get("SMTP_SSL") or os.getenv("SMTP_SSL") or "false").lower() == "true",
