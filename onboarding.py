@@ -3,6 +3,7 @@ import json
 from datetime import datetime  # NEW
 import streamlit as st
 from supabase import create_client, Client
+from send_sms_vonage import send_sms_vonage
 
 # Helper imports
 from download_users_json import download_users_json
@@ -49,13 +50,15 @@ with st.form("onboarding_form", clear_on_submit=False):
     # optional single-file save name
     filename = st.text_input("Filename (optional, e.g., alice_2025-09-23.json)", key="filename")
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         save_clicked = st.form_submit_button("Save", type="primary")
     with c2:
         clear_clicked = st.form_submit_button("Clear all the fields")
     with c3:
-        send_email_clicked = st.form_submit_button("Send email")  # NEW
+        send_email_clicked = st.form_submit_button("Send email")
+    with c4:
+        send_sms_clicked = st.form_submit_button("Send SMS")  # NEW
 
 if clear_clicked:
     clear_fields()
@@ -150,6 +153,28 @@ if send_email_clicked:
 
         except Exception as e:
             st.error(f"Send email failed: {e}")
+            
+
+# ---------- SEND SMS (Vonage) ----------
+if 'send_sms_clicked' in locals() and send_sms_clicked:
+    rec = build_record()
+    if not rec["mobile"]:
+        st.error("Please enter a mobile number (e.g., +41...) before sending SMS.")
+    else:
+        try:
+            api_key    = st.secrets.get("VONAGE_API_KEY")    or os.getenv("VONAGE_API_KEY")
+            api_secret = st.secrets.get("VONAGE_API_SECRET") or os.getenv("VONAGE_API_SECRET")
+            from_id    = st.secrets.get("VONAGE_SMS_FROM")   or os.getenv("VONAGE_SMS_FROM") or "Onboarding"
+
+            if not api_key or not api_secret:
+                st.error("Missing VONAGE_API_KEY or VONAGE_API_SECRET in secrets/env.")
+            else:
+                message = rec["name"] or "Hello from the onboarding portal"
+                msg_id = send_sms_vonage(api_key, api_secret, from_id, rec["mobile"], message)
+                st.success(f"SMS queued via Vonage (message-id: {msg_id})")
+        except Exception as e:
+            st.error(f"Send SMS failed: {e}")
+
 
 st.divider()
 
