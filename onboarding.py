@@ -109,7 +109,6 @@ if save_clicked:
             users = _load_users_as_list()
             users.append(
                 {
-                    "timestamp_utc": _now_utc_iso(),
                     "name": name.strip(),
                     "birth_date": _serialize_date(birth_date),
                     "nationality": nationality.strip(),
