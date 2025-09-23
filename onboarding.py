@@ -1,4 +1,5 @@
 import os
+import io
 import json
 from datetime import datetime, timezone, date
 
@@ -6,105 +7,88 @@ import streamlit as st
 from supabase import create_client, Client
 from streamlit.components.v1 import html as st_html
 
-# ----------------------------- App setup -----------------------------
+# ---------- Page ----------
 st.set_page_config(page_title="on-boarding", page_icon="🧾", layout="centered")
 st.title("on-boarding")
 st.caption("Enter user data, then Save to append it to Users.json in your Supabase bucket.")
 
-# ----------------------------- Supabase ------------------------------
+# ---------- Supabase ----------
 @st.cache_resource(show_spinner=False)
 def get_supabase() -> Client:
     url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
     key = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        st.error(
-            "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.\n"
-            "Add them in .streamlit/secrets.toml (local) or as Render environment variables (prod)."
-        )
+        st.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.")
         st.stop()
     return create_client(url, key)
 
 supabase = get_supabase()
 
-# Bucket and file path (adjust if your bucket name differs)
-BUCKET = "Test1"          # <-- bucket name
-OBJECT_PATH = "Users.json"  # <-- file name inside the bucket
+# Change these if needed
+BUCKET = "Test1"           # storage bucket name
+OBJECT_PATH = "Users.json" # file path inside the bucket
 
-# ----------------------------- Helpers -------------------------------
-def _download_users_json() -> bytes | None:
-    """
-    Returns file bytes if Users.json exists, else None.
-    """
-    try:
-        blob = supabase.storage.from_(BUCKET).download(OBJECT_PATH)
-        # supabase-py v2 returns bytes; if dict, adapt accordingly
-        if isinstance(blob, (bytes, bytearray)):
-            return bytes(blob)
-        # Some client versions return dict with 'data' bytes
-        if isinstance(blob, dict) and "data" in blob:
-            return blob["data"]
-        return None
-    except Exception:
-        return None
-
-def _upload_users_json(data: list[dict]) -> None:
-    """
-    Uploads (overwrites) Users.json with the provided list of user records.
-    """
-    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-    supabase.storage.from_(BUCKET).upload(
-        OBJECT_PATH,
-        payload,
-        {
-            "content-type": "application/json; charset=utf-8",
-            "upsert": True,  # allow overwrite if the file already exists
-        },
-    )
-
-def _load_users_as_list() -> list[dict]:
-    """
-    Loads Users.json as a Python list. If file is missing or invalid, returns [].
-    """
-    raw = _download_users_json()
-    if not raw:
-        return []
-    try:
-        obj = json.loads(raw.decode("utf-8"))
-        if isinstance(obj, list):
-            return obj
-        # If someone manually created a non-list JSON, wrap it for safety
-        return [obj]
-    except Exception:
-        return []
-
+# ---------- Helpers ----------
 def _serialize_date(d: date | None) -> str | None:
     return d.isoformat() if isinstance(d, date) else None
 
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+def _download_users_json() -> bytes | None:
+    """Return the Users.json bytes if present, else None."""
+    try:
+        blob = supabase.storage.from_(BUCKET).download(OBJECT_PATH)
+        if isinstance(blob, (bytes, bytearray)):
+            return bytes(blob)
+        if isinstance(blob, dict) and "data" in blob:  # some client versions
+            return blob["data"]
+    except Exception:
+        pass
+    return None
+
+def _remove_users_json_if_exists():
+    """Best-effort removal before re-upload (avoids upsert edge cases)."""
+    try:
+        supabase.storage.from_(BUCKET).remove([OBJECT_PATH])
+    except Exception:
+        pass  # ignore if it doesn't exist
+
+def _upload_users_json(records: list[dict]):
+    """Write the entire list to Users.json (overwrite). Use BytesIO for safety."""
+    data_bytes = json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
+    file_obj = io.BytesIO(data_bytes)  # <- file-like object prevents .encode() mishaps
+    _remove_users_json_if_exists()
+    # Use 'contentType' (camelCase) to match client expectations
+    supabase.storage.from_(BUCKET).upload(
+        OBJECT_PATH,
+        file_obj,
+        {"contentType": "application/json; charset=utf-8"}
+    )
+
+def _load_users_as_list() -> list[dict]:
+    """Load Users.json as list; return [] if missing/invalid."""
+    raw = _download_users_json()
+    if not raw:
+        return []
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+        return obj if isinstance(obj, list) else [obj]
+    except Exception:
+        return []
+
 def _clear_fields():
     for k in ("name", "birth_date", "nationality", "address", "email", "mobile"):
-        if k in st.session_state:
-            del st.session_state[k]
+        st.session_state.pop(k, None)
     st.success("All fields cleared.")
     st.rerun()
 
 def _exit_app():
-    # Best effort: attempt to close the browser tab (will only work if opened by script)
-    st_html(
-        """
-        <script>
-          try { window.close(); } catch (e) {}
-        </script>
-        """,
-        height=0,
-    )
-    # Fallback UX if the browser blocks window.close()
+    st_html("<script>try{window.close()}catch(e){}</script>", height=0)
     st.success("You can now close this tab/window.")
     st.stop()
 
-# ----------------------------- Form UI -------------------------------
+# ---------- Form ----------
 with st.form("onboarding_form", clear_on_submit=False):
     st.subheader("User information")
 
@@ -115,40 +99,33 @@ with st.form("onboarding_form", clear_on_submit=False):
     email = st.text_input("email", key="email", placeholder="name@example.com")
     mobile = st.text_input("mobile phone number", key="mobile", placeholder="+41 79 123 45 67")
 
-    # Buttons row inside the form for Save / Clear
     c1, c2 = st.columns(2)
     with c1:
         save_clicked = st.form_submit_button("Save", type="primary")
     with c2:
         clear_clicked = st.form_submit_button("Clear all the fields")
 
-# Process form buttons
 if clear_clicked:
     _clear_fields()
 
 if save_clicked:
-    # Minimal validation
-    missing = []
-    if not name.strip():
-        missing.append("Name")
-    if not email.strip():
-        missing.append("email")
+    missing = [fld for fld, val in {"Name": name, "email": email}.items() if not str(val).strip()]
     if missing:
-        st.error(f"Please fill the required field(s): {', '.join(missing)}.")
+        st.error("Please fill the required field(s): " + ", ".join(missing))
     else:
         try:
-            # Load existing list (or empty), append new record, overwrite Users.json
             users = _load_users_as_list()
-            record = {
-                "timestamp_utc": _now_utc_iso(),
-                "name": name.strip(),
-                "birth_date": _serialize_date(birth_date),
-                "nationality": nationality.strip(),
-                "address": address.strip(),
-                "email": email.strip(),
-                "mobile": mobile.strip(),
-            }
-            users.append(record)
+            users.append(
+                {
+                    "timestamp_utc": _now_utc_iso(),
+                    "name": name.strip(),
+                    "birth_date": _serialize_date(birth_date),
+                    "nationality": nationality.strip(),
+                    "address": address.strip(),
+                    "email": email.strip(),
+                    "mobile": mobile.strip(),
+                }
+            )
             _upload_users_json(users)
             st.success("Saved to Supabase: Users.json")
         except Exception as e:
@@ -156,23 +133,20 @@ if save_clicked:
 
 st.divider()
 
-# ----------------------------- Download & Exit ------------------------
+# ---------- Download & Exit ----------
 d1, d2 = st.columns(2)
-
 with d1:
     if st.button("Download"):
         content = _download_users_json()
         if not content:
             st.warning("Users.json does not exist yet.")
         else:
-            # Show an actual download button with the loaded bytes
             st.download_button(
                 label="⬇️ Download Users.json",
                 data=content,
                 file_name="Users.json",
                 mime="application/json",
             )
-
 with d2:
     if st.button("Exit"):
         _exit_app()
