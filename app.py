@@ -21,10 +21,13 @@ def get_supabase() -> Client:
         st.stop()
     return create_client(url, key)
 
+st.write("Service key configured:", bool(st.secrets.get("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")))
+
 supabase = get_supabase()
 
 # ❗ Change this if your bucket has a different name
-BUCKET = "Test1"
+BUCKET = "Test1"             # bucket name
+
 
 # ---------------- Calculator ----------------
 with st.form("calc_form", clear_on_submit=False):
@@ -115,7 +118,7 @@ if submitted:
 
         # Store inside the Test1/ directory (object key prefix)
         # Example filename: Test1/20250923_153045_3f9b7b1e.csv
-        path = f"Test1/{now:%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}.csv"
+        path   = f"{now:%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}.csv"
 
         supabase.storage.from_(BUCKET).upload(path, data_bytes, {"content-type": "text/csv"})
 
