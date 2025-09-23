@@ -110,7 +110,7 @@ if save_clicked:
             users.append(
                 {
                     "name": name.strip(),
-                    "birth_date": _serialize_date(birth_date),
+                    "birth_date": birth_date.strip(),
                     "nationality": nationality.strip(),
                     "address": address.strip(),
                     "email": email.strip(),
