@@ -3,9 +3,7 @@ from typing import List, Dict
 from download_users_json import download_users_json
 
 def load_users_as_list(supabase, bucket: str, object_path: str) -> List[Dict]:
-    """Load Users.json as list; return [] if missing/invalid."""
     raw = download_users_json(supabase, bucket, object_path)
-    print("load_users_as_list")
     if not raw:
         return []
     try:

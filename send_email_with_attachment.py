@@ -9,20 +9,9 @@ def send_email_with_attachment(
     attachment_filename: str,
     attachment_bytes: bytes,
 ):
-    """
-    Sends an email with a JSON attachment using SMTP.
-    Expected smtp_cfg keys:
-      host, port, username, password, sender_email, sender_name,
-      use_ssl (bool), use_starttls (bool)
-    """
-    required = ["host", "port", "sender_email"]
-    for k in required:
-        if not smtp_cfg.get(k):
-            raise ValueError(f"Missing SMTP config: {k}")
-
     msg = EmailMessage()
     sender_name = smtp_cfg.get("sender_name") or ""
-    sender_email = smtp_cfg["sender_email"]
+    sender_email = smtp_cfg.get("sender_email")
     from_header = f"{sender_name} <{sender_email}>" if sender_name else sender_email
 
     msg["From"] = from_header
@@ -30,13 +19,11 @@ def send_email_with_attachment(
     msg["Subject"] = subject
     msg.set_content(body_text)
 
-    # Attach JSON
-    maintype = "application"
-    subtype = "json"
+    # Attach JSON (or any bytes)
     msg.add_attachment(
         attachment_bytes,
-        maintype=maintype,
-        subtype=subtype,
+        maintype="application",
+        subtype="octet-stream",
         filename=attachment_filename,
     )
 
