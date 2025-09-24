@@ -475,7 +475,7 @@ def view_dashboard():
                 }
 
                 # Call the CERTUS download API (should return a ZIP)
-                r = requests.get(dl_url, headers=headers, timeout=180)
+                r = requests.put(dl_url, headers=headers, timeout=180)
                 if not r.ok:
                     st.error(f"Download API error: HTTP {r.status_code}")
                     st.stop()
