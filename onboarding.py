@@ -549,8 +549,15 @@ def view_dashboard():
     CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
     if CERTUS_Batch_ID:
         import io, json as _json, posixpath
-        import numpy as np
-        import cv2
+
+        try:
+            import numpy as np
+            import cv2
+        except ImportError:
+            st.error("QR parsing requires OpenCV and NumPy. Install with: pip install opencv-python-headless numpy")
+            st.stop()
+
+        import io, json as _json, posixpath
 
         qr_dir = f"CERTUS/{CERTUS_Batch_ID}/QR-code"
         st.subheader("CERTUS QR codes parsing")
