@@ -469,7 +469,7 @@ def view_dashboard():
 
                 dl_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/download"
                 headers = {
-                    "accept": "*/*",
+                    "accept": "application/json",
                     "issuer-impersonate": "utopia",
                     "Authorization": f"Bearer {key}",
                 }
@@ -541,7 +541,7 @@ def view_dashboard():
                 # API call (as requested)
                 dl_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/activate"
                 headers = {
-                    "accept": "*/*",
+                    "accept": "application/json",
                     "issuer-impersonate": "utopia",
                     "Authorization": f"Bearer {key}",
                 }
