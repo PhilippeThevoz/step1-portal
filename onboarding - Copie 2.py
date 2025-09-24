@@ -3,7 +3,6 @@ import json
 from datetime import datetime
 import streamlit as st
 from supabase import create_client, Client
-import hashlib
 
 # ---- External helpers you already use ----
 from send_sms_vonage import send_sms_vonage
@@ -92,12 +91,7 @@ def view_onboarding():
         email = st.text_input("email", key="email")
         mobile = st.text_input("mobile phone number", key="mobile")
 
-        # NEW signup credentials (right after mobile)
-        username = st.text_input("username", key="username")
-        password = st.text_input("password", type="password", key="password")
-        repeat_password = st.text_input("repeat password", type="password", key="repeat_password")
-
-        # optional single-file save name (kept after credentials)
+        # optional single-file save name
         filename = st.text_input("Filename (optional, e.g., alice_2025-09-23.json)", key="filename")
 
         c1, c2, c3, c4 = st.columns(4)
@@ -112,13 +106,9 @@ def view_onboarding():
 
     # actions outside the form
     if clear_clicked:
-        # (Tip) your clear_fields helper may not yet clear the new keys; we also pop them here
         clear_fields()
-        for k in ("username", "password", "repeat_password"):
-            st.session_state.pop(k, None)
 
-    def build_record_base():
-        """Base record without password; username included."""
+    def build_record():
         return {
             "name": (name or "").strip(),
             "birth_date": (birth_date or "").strip(),
@@ -126,31 +116,16 @@ def view_onboarding():
             "address": (address or "").strip(),
             "email": (email or "").strip(),
             "mobile": (mobile or "").strip(),
-            "username": (username or "").strip(),
         }
 
     # ---------- SAVE ----------
     if save_clicked:
-        # required fields
-        missing = [fld for fld, val in {
-            "Name": name,
-            "email": email,
-            "username": username,
-            "password": password,
-            "repeat password": repeat_password,
-        }.items() if not str(val or "").strip()]
+        missing = [fld for fld, val in {"Name": name, "email": email}.items() if not str(val).strip()]
         if missing:
             st.error("Please fill the required field(s): " + ", ".join(missing))
-        elif password != repeat_password:
-            st.error("Passwords do not match. Please re-enter them.")
         else:
             try:
-                # Hash the password (store only the hash)
-                password_sha256 = hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-                # Build full record (with password hash; never store plaintext)
-                record = build_record_base()
-                record["password_sha256"] = password_sha256
+                record = build_record()
 
                 # 1) Append to Users.json (list)
                 users = load_users_as_list(supabase, BUCKET, OBJECT_PATH)
@@ -173,12 +148,12 @@ def view_onboarding():
 
     # ---------- SEND EMAIL ----------
     if 'send_email_clicked' in locals() and send_email_clicked:
-        rec = build_record_base()  # email does not require password hash
+        rec = build_record()
         if not rec["email"]:
             st.error("Please enter a valid email address before sending.")
         else:
             try:
-                # Build the JSON for this single record (without plaintext password)
+                # Build the JSON for this single record
                 json_str = json.dumps(rec, ensure_ascii=False, indent=2)
                 attachment_name = (filename or "").strip()
                 if not attachment_name:
@@ -224,7 +199,7 @@ def view_onboarding():
 
     # ---------- SEND SMS (Vonage) ----------
     if 'send_sms_clicked' in locals() and send_sms_clicked:
-        rec = build_record_base()
+        rec = build_record()
         if not rec["mobile"]:
             st.error("Please enter a mobile number (e.g., +41...) before sending SMS.")
         else:
@@ -263,6 +238,7 @@ def view_onboarding():
     with d3:
         if st.button("← Back to Home"):
             go("home")
+
 
 # ------------------------------------------------------------------------------
 # Router dispatch
