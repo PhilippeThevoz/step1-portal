@@ -564,7 +564,6 @@ def view_dashboard():
 #
 #------ CERTUS QR codes parsing
 
-    batch_id = st.session_state.get("CERTUS_Batch_ID")
     if batch_id:
         import io, json, posixpath
         import numpy as np
