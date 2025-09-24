@@ -417,20 +417,24 @@ def view_dashboard():
             # Equivalent to: curl -X POST ... -d certus_content
             resp = requests.post(url, headers=headers, json=certus_content, timeout=60)
 
-            # Parse response into certus_output (JSON if possible, else text)
+            st.subheader("CERTUS API response")
+            # show raw response safely
+            try:
+                st.json(resp.json())
+            except Exception:
+                st.code(resp.text)
+
+            if resp.ok:
+                st.success("CERTUS batch created successfully.")
+            else:
+                st.error(f"CERTUS API error: HTTP {resp.status_code}")
+                
+                
+            # --- NEW: store response as `certus_output` and display it ---
             try:
                 certus_output = resp.json()   # dict/list if JSON
             except Exception:
                 certus_output = resp.text     # fallback to raw text
-
-            # --- NEW: extract batchId into CERTUS_Batch_ID ---
-            CERTUS_Batch_ID = None
-            try:
-                payload = certus_output if isinstance(certus_output, dict) else json.loads(certus_output)
-                if isinstance(payload, dict):
-                    CERTUS_Batch_ID = payload.get("batchId") or payload.get("batch_id")
-            except Exception:
-                pass
 
             st.subheader("-------- CERTUS API response")
             if isinstance(certus_output, (dict, list)):
@@ -438,15 +442,14 @@ def view_dashboard():
             else:
                 st.code(certus_output)
 
-            # (optional) show & persist the extracted ID
-            if CERTUS_Batch_ID:
-                st.info(f"CERTUS_Batch_ID: {CERTUS_Batch_ID}")
-                st.session_state["CERTUS_Batch_ID"] = CERTUS_Batch_ID
-
             if resp.ok:
                 st.success("-------- CERTUS batch created successfully.")
             else:
                 st.error(f"CERTUS API error: HTTP {resp.status_code}")
+
+        except Exception as e:
+            st.error(f"Create CERTUS failed: {e}")
+
 
 # ----------------------------------------------------------------------------
 # Router dispatch
