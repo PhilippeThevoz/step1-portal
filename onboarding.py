@@ -376,23 +376,22 @@ def view_dashboard():
         st.rerun()
 
     # --- Create CERTUS ---
+# --- Create CERTUS ---
     if create_certus:
         try:
-            # 1) Download CERTUS-Test.json from Supabase bucket (default BUCKET="Test1")
+            # 1) Download CERTUS-Test.json from Supabase bucket
             object_name = "CERTUS-Test.json"
             raw = supabase.storage.from_(BUCKET).download(object_name)
             if isinstance(raw, dict) and "data" in raw:
                 raw = raw["data"]
-
             if not raw:
                 st.error(f"{object_name} not found in bucket '{BUCKET}'.")
-                return
+                st.stop()
 
-            # 2) Parse into certus_content (Python object)
+            # 2) Parse into certus_content
             try:
                 certus_content = json.loads(raw.decode("utf-8"))
             except Exception:
-                # if already a str/bytes representing JSON, try plain json.loads
                 certus_content = json.loads(raw)
 
             st.subheader("CERTUS content (preview)")
@@ -401,10 +400,9 @@ def view_dashboard():
             # 3) Call CERTUS API
             base = st.secrets.get("CERTUS_API_PATH") or os.getenv("CERTUS_API_PATH")
             key  = st.secrets.get("CERTUS_API_KEY")  or os.getenv("CERTUS_API_KEY")
-
             if not base or not key:
                 st.error("Missing CERTUS_API_PATH or CERTUS_API_KEY environment variables.")
-                return
+                st.stop()
 
             url = base.rstrip("/") + "/batches/json"
             headers = {
@@ -414,16 +412,15 @@ def view_dashboard():
                 "Content-Type": "application/json",
             }
 
-            # Equivalent to: curl -X POST ... -d certus_content
             resp = requests.post(url, headers=headers, json=certus_content, timeout=60)
 
-            # Parse response into certus_output (JSON if possible, else text)
+            # Parse response into certus_output
             try:
-                certus_output = resp.json()   # dict/list if JSON
+                certus_output = resp.json()
             except Exception:
-                certus_output = resp.text     # fallback to raw text
+                certus_output = resp.text
 
-            # --- NEW: extract batchId into CERTUS_Batch_ID ---
+            # Extract batchId if present
             CERTUS_Batch_ID = None
             try:
                 payload = certus_output if isinstance(certus_output, dict) else json.loads(certus_output)
@@ -438,7 +435,6 @@ def view_dashboard():
             else:
                 st.code(certus_output)
 
-            # (optional) show & persist the extracted ID
             if CERTUS_Batch_ID:
                 st.info(f"CERTUS_Batch_ID: {CERTUS_Batch_ID}")
                 st.session_state["CERTUS_Batch_ID"] = CERTUS_Batch_ID
@@ -447,6 +443,9 @@ def view_dashboard():
                 st.success("-------- CERTUS batch created successfully.")
             else:
                 st.error(f"CERTUS API error: HTTP {resp.status_code}")
+
+        except Exception as e:
+            st.error(f"Create CERTUS failed: {e}")
 
 # ----------------------------------------------------------------------------
 # Router dispatch
