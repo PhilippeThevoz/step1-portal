@@ -560,6 +560,93 @@ def view_dashboard():
                 st.error(f"Activation error: {e}")
     else:
         st.info("No CERTUS_Batch_ID available. Create a batch first.")
+        
+#
+#------ CERTUS QR codes parsing
+
+    batch_id = st.session_state.get("CERTUS_Batch_ID")
+    if batch_id:
+        import io, json, posixpath
+        import numpy as np
+        import cv2
+
+        qr_dir = f"CERTUS/{batch_id}/QR-code"
+        st.subheader("CERTUS QR codes parsing")
+
+        # List PNGs in the QR-code folder
+        try:
+            entries = supabase.storage.from_(BUCKET).list(qr_dir)  # e.g. [{'name': 'prefix.png'}, ...]
+        except Exception as e:
+            st.error(f"Could not list '{qr_dir}': {e}")
+        else:
+            pngs = [e.get("name") for e in entries if isinstance(e, dict) and str(e.get("name","")).lower().endswith(".png")]
+            if not pngs:
+                st.info(f"No PNG files found in '{qr_dir}'.")
+            else:
+                decoded = []
+                for fname in pngs:
+                    object_path = f"{qr_dir}/{fname}"
+                    try:
+                        # Download PNG
+                        blob = supabase.storage.from_(BUCKET).download(object_path)
+                        if isinstance(blob, dict) and "data" in blob:
+                            blob = blob["data"]
+
+                        # Decode QR(s) with OpenCV
+                        img_arr = np.frombuffer(blob, dtype=np.uint8)
+                        img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
+                        detector = cv2.QRCodeDetector()
+
+                        texts = []
+                        # Try multi first
+                        try:
+                            retval, decoded_info, points, _ = detector.detectAndDecodeMulti(img)
+                            if retval and decoded_info:
+                                texts = [t for t in decoded_info if t]
+                        except Exception:
+                            pass
+                        # Fallback to single
+                        if not texts:
+                            t, _ = detector.detectAndDecode(img)
+                            if t:
+                                texts = [t]
+
+                        if not texts:
+                            st.warning(f"Could not decode QR in '{fname}'")
+                            continue
+
+                        # Save alongside as JSON: prefix.json
+                        prefix = fname.rsplit(".", 1)[0]
+                        json_path = f"{qr_dir}/{prefix}.json"
+                        payload = {
+                            "file": fname,
+                            "batchId": batch_id,
+                            "qr": texts if len(texts) > 1 else texts[0],
+                        }
+                        data_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+                        # Overwrite if exists
+                        try:
+                            supabase.storage.from_(BUCKET).remove([json_path])
+                        except Exception:
+                            pass
+                        supabase.storage.from_(BUCKET).upload(
+                            json_path,
+                            data_bytes,
+                            {"contentType": "application/json; charset=utf-8"},
+                        )
+
+                        decoded.append({"png": fname, "json": posixpath.basename(json_path), "qr": payload["qr"]})
+                    except Exception as e:
+                        st.error(f"Failed to process '{fname}': {e}")
+
+                if decoded:
+                    st.success(f"Parsed {len(decoded)} QR PNG file(s) and saved JSON next to them.")
+                    st.json(decoded, expanded=False)
+    else:
+        st.info("No CERTUS_Batch_ID available. Activate/Create a batch first.")
+
+            
 
 # ----------------------------------------------------------------------------
 # Router dispatch
