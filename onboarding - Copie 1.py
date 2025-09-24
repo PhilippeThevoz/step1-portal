@@ -4,7 +4,6 @@ import hashlib
 import secrets
 from datetime import datetime
 import streamlit as st
-import requests
 from supabase import create_client, Client
 
 # ---- External helpers ----
@@ -170,9 +169,6 @@ def view_signin():
                 # clear 2FA state
                 st.session_state["pending_2fa"] = None
                 st.session_state["signin_stage"] = "credentials"
-                # NEW: jump to the dashboard view
-                st.session_state["view"] = "dashboard"
-                st.rerun()
             else:
                 st.error("Incorrect code. Please try again.")
 
@@ -356,98 +352,13 @@ def view_onboarding():
         if st.button("← Back to Home"):
             go("home")
 
-def view_dashboard():
-    user = st.session_state.get("user") or {}
-    st.title("Welcome")
-    st.caption(f"Logged in as: {user.get('username','(unknown)')}")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        logout = st.button("Logout", use_container_width=True)
-    with c2:
-        create_certus = st.button("Create CERTUS", type="primary", use_container_width=True)
-
-    # --- Logout ---
-    if logout:
-        # minimal, safe reset
-        for k in ("logged_in", "user", "pending_2fa"):
-            st.session_state.pop(k, None)
-        st.session_state["view"] = "home"
-        st.rerun()
-
-    # --- Create CERTUS ---
-    if create_certus:
-        try:
-            # 1) Download CERTUS-Test.json from Supabase bucket (default BUCKET="Test1")
-            object_name = "CERTUS-Test.json"
-            raw = supabase.storage.from_(BUCKET).download(object_name)
-            if isinstance(raw, dict) and "data" in raw:
-                raw = raw["data"]
-
-            if not raw:
-                st.error(f"{object_name} not found in bucket '{BUCKET}'.")
-                return
-
-            # 2) Parse into certus_content (Python object)
-            try:
-                certus_content = json.loads(raw.decode("utf-8"))
-            except Exception:
-                # if already a str/bytes representing JSON, try plain json.loads
-                certus_content = json.loads(raw)
-
-            st.subheader("CERTUS content (preview)")
-            st.json(certus_content, expanded=False)
-
-            # 3) Call CERTUS API
-            base = st.secrets.get("CERTUS_API_PATH") or os.getenv("CERTUS_API_PATH")
-            key  = st.secrets.get("CERTUS_API_KEY")  or os.getenv("CERTUS_API_KEY")
-
-            if not base or not key:
-                st.error("Missing CERTUS_API_PATH or CERTUS_API_KEY environment variables.")
-                return
-
-            url = base.rstrip("/") + "/batches/json"
-            headers = {
-                "accept": "application/json",
-                "issuer-impersonate": "utopia",
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            }
-
-            # Equivalent to: curl -X POST ... -d certus_content
-            resp = requests.post(url, headers=headers, json=certus_content, timeout=60)
-
-            st.subheader("CERTUS API response")
-            # show raw response safely
-            try:
-                st.json(resp.json())
-            except Exception:
-                st.code(resp.text)
-
-            if resp.ok:
-                st.success("CERTUS batch created successfully.")
-            else:
-                st.error(f"CERTUS API error: HTTP {resp.status_code}")
-
-        except Exception as e:
-            st.error(f"Create CERTUS failed: {e}")
-
-
 # ----------------------------------------------------------------------------
 # Router dispatch
 # ----------------------------------------------------------------------------
-
 route = st.session_state["view"]
 if route == "home":
     view_home()
 elif route == "signin":
     view_signin()
-elif route == "dashboard":   # NEW
-    # protect this view
-    if st.session_state.get("logged_in"):
-        view_dashboard()
-    else:
-        st.warning("Please sign in first.")
-        view_signin()
 else:
     view_onboarding()
