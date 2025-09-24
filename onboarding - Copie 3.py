@@ -3,11 +3,11 @@ import json
 import hashlib
 import secrets
 from datetime import datetime
-import requests
 import streamlit as st
+import requests
 from supabase import create_client, Client
 
-# ---- External helpers (existing in your project) ----
+# ---- External helpers ----
 from send_sms_vonage import send_sms_vonage
 from send_plain_email import send_plain_email
 from download_users_json import download_users_json
@@ -36,11 +36,11 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 # Storage config
-BUCKET = os.getenv("SUPABASE_BUCKET") or "Test1"
-OBJECT_PATH = os.getenv("SUPABASE_USERS_OBJECT") or "Users.json"
+BUCKET = os.getenv("SUPABASE_BUCKET") or "Test1"            # Supabase Storage bucket name
+OBJECT_PATH = os.getenv("SUPABASE_USERS_OBJECT") or "Users.json"  # File path inside the bucket
 
 # ----------------------------------------------------------------------------
-# Simple router (Home / Signin / Onboarding / Dashboard)
+# Simple router (Home / Signin / Onboarding)
 # ----------------------------------------------------------------------------
 if "view" not in st.session_state:
     st.session_state["view"] = "home"
@@ -170,7 +170,7 @@ def view_signin():
                 # clear 2FA state
                 st.session_state["pending_2fa"] = None
                 st.session_state["signin_stage"] = "credentials"
-                # go to dashboard
+                # NEW: jump to the dashboard view
                 st.session_state["view"] = "dashboard"
                 st.rerun()
             else:
@@ -369,13 +369,15 @@ def view_dashboard():
 
     # --- Logout ---
     if logout:
-        for k in ("logged_in", "user", "pending_2fa", "CERTUS_Batch_ID", "certus_output"):
+        # minimal, safe reset
+        for k in ("logged_in", "user", "pending_2fa"):
             st.session_state.pop(k, None)
         st.session_state["view"] = "home"
         st.rerun()
 
-    # --- Create CERTUS ---
+# --- Create CERTUS ---
     if create_certus:
+        print("Create CERTUS")
         try:
             # 1) Download CERTUS-Test.json from Supabase bucket
             object_name = "CERTUS-Test.json"
@@ -395,7 +397,7 @@ def view_dashboard():
             st.subheader("CERTUS content (preview)")
             st.json(certus_content, expanded=False)
 
-            # 3) Call CERTUS API (create)
+            # 3) Call CERTUS API
             base = st.secrets.get("CERTUS_API_PATH") or os.getenv("CERTUS_API_PATH")
             key  = st.secrets.get("CERTUS_API_KEY")  or os.getenv("CERTUS_API_KEY")
             if not base or not key:
@@ -444,46 +446,21 @@ def view_dashboard():
 
         except Exception as e:
             st.error(f"Create CERTUS failed: {e}")
+            
+            
+#
+#-------- API call to download a batch --------
 
-    st.divider()
-    #
-    #--------------- Activate the batch (kept as PUT /activation)
+    # Only proceed if we have a CERTUS_Batch_ID from the previous step
+    print("Download")
     CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
     if CERTUS_Batch_ID:
-        st.subheader("Activate CERTUS batch")
-        if st.button("Activate batch", use_container_width=True):
-            try:
-                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
-                if not key:
-                    st.error("Missing CERTUS_API_KEY environment/secret value.")
-                    st.stop()
+        import io, zipfile, mimetypes  # local imports to avoid changing your global header
 
-                act_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/activation"
-                headers = {
-                    "accept": "*/*",
-                    "issuer-impersonate": "utopia",
-                    "Authorization": f"Bearer {key}",
-                }
-
-                resp = requests.put(act_url, headers=headers, timeout=60)
-                if resp.ok:
-                    st.success("Activation has been successful")
-                else:
-                    st.error(f"Activation failed: HTTP {resp.status_code} — {resp.text}")
-
-            except Exception as e:
-                st.error(f"Activation error: {e}")
-    else:
-        st.info("No CERTUS_Batch_ID available. Create a batch first.")
-
-    st.divider()
-    #-------- Add below the API call to download a batch --------
-    CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
-    if CERTUS_Batch_ID:
-        import io, zipfile, mimetypes
         st.subheader("Download CERTUS batch")
         if st.button("Download batch ZIP & upload to Supabase", use_container_width=True):
             try:
+                # Build the download request
                 key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
                 if not key:
                     st.error("Missing CERTUS_API_KEY environment/secret value.")
@@ -496,6 +473,7 @@ def view_dashboard():
                     "Authorization": f"Bearer {key}",
                 }
 
+                # Call the CERTUS download API (should return a ZIP)
                 r = requests.get(dl_url, headers=headers, timeout=180)
                 if not r.ok:
                     st.error(f"Download API error: HTTP {r.status_code}")
@@ -503,6 +481,7 @@ def view_dashboard():
 
                 zip_bytes = r.content
 
+                # Offer the ZIP for direct download in the UI
                 st.download_button(
                     label="⬇️ Download CERTUS ZIP",
                     data=zip_bytes,
@@ -510,6 +489,7 @@ def view_dashboard():
                     mime="application/zip",
                 )
 
+                # Unzip in-memory and upload files to Supabase bucket (Test1)
                 try:
                     zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
                 except zipfile.BadZipFile:
@@ -520,12 +500,14 @@ def view_dashboard():
                 for member in zf.infolist():
                     if member.is_dir():
                         continue
-                    data = zf.read(member)
+                    data = zf.read(member)  # bytes of the extracted file
 
+                    # Store under a prefix per batch: Test1/CERTUS/<batch>/...
                     object_path = f"CERTUS/{CERTUS_Batch_ID}/{member.filename}".replace("\\", "/")
                     content_type, _ = mimetypes.guess_type(member.filename)
                     opts = {"contentType": content_type or "application/octet-stream"}
 
+                    # Best-effort remove if it already exists (prevents upsert quirks)
                     try:
                         supabase.storage.from_(BUCKET).remove([object_path])
                     except Exception:
@@ -540,21 +522,60 @@ def view_dashboard():
                 st.error(f"Batch download/upload failed: {e}")
     else:
         st.info("Create a CERTUS batch first to enable download.")
+        
+#
+#--------------- Activate the batch
 
-    st.divider()
-    #
-    #------ CERTUS QR codes parsing
-    CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
+# Only proceed if we have a CERTUS_Batch_ID
+    print("Activation")
+    print("CERTUS_Batch_ID : ",CERTUS_Batch_ID)
     if CERTUS_Batch_ID:
-        import io, json as _json, posixpath
+        st.subheader("Activate CERTUS batch")
+        if st.button("Activate batch", use_container_width=True):
+            try:
+                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
+                if not key:
+                    st.error("Missing CERTUS_API_KEY environment/secret value.")
+                    st.stop()
+
+                # API call (as requested)
+                dl_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/activation"
+                headers = {
+                    "accept": "application/json",
+                    "issuer-impersonate": "utopia",
+                    "Authorization": f"Bearer {key}",
+                }
+
+                # Most APIs use PUT for activate; fall back to GET if needed
+                resp = requests.put(dl_url, headers=headers, timeout=60)
+                if resp.status_code == 405:  # Method Not Allowed -> try GET
+                    resp = requests.get(dl_url, headers=headers, timeout=60)
+
+                if resp.ok:
+                    st.success("Activation has been successful")
+                else:
+                    st.error(f"Activation failed: HTTP {resp.status_code} — {resp.text}")
+
+            except Exception as e:
+                st.error(f"Activation error: {e}")
+    else:
+        st.info("No CERTUS_Batch_ID available. Create a batch first.")
+        
+#
+#------ CERTUS QR codes parsing
+
+    if CERTUS_Batch_ID:
+        print("QR code parsing")
+        import io, json, posixpath
         import numpy as np
         import cv2
 
-        qr_dir = f"CERTUS/{CERTUS_Batch_ID}/QR-code"
+        qr_dir = f"CERTUS/{batch_id}/QR-code"
         st.subheader("CERTUS QR codes parsing")
 
+        # List PNGs in the QR-code folder
         try:
-            entries = supabase.storage.from_(BUCKET).list(qr_dir)
+            entries = supabase.storage.from_(BUCKET).list(qr_dir)  # e.g. [{'name': 'prefix.png'}, ...]
         except Exception as e:
             st.error(f"Could not list '{qr_dir}': {e}")
         else:
@@ -566,10 +587,12 @@ def view_dashboard():
                 for fname in pngs:
                     object_path = f"{qr_dir}/{fname}"
                     try:
+                        # Download PNG
                         blob = supabase.storage.from_(BUCKET).download(object_path)
                         if isinstance(blob, dict) and "data" in blob:
                             blob = blob["data"]
 
+                        # Decode QR(s) with OpenCV
                         img_arr = np.frombuffer(blob, dtype=np.uint8)
                         img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
                         detector = cv2.QRCodeDetector()
@@ -582,9 +605,9 @@ def view_dashboard():
                                 texts = [t for t in decoded_info if t]
                         except Exception:
                             pass
-                        # Fallback to single (FIXED unpack: three values)
+                        # Fallback to single
                         if not texts:
-                            t, _, _ = detector.detectAndDecode(img)
+                            t, _ = detector.detectAndDecode(img)
                             if t:
                                 texts = [t]
 
@@ -592,15 +615,17 @@ def view_dashboard():
                             st.warning(f"Could not decode QR in '{fname}'")
                             continue
 
+                        # Save alongside as JSON: prefix.json
                         prefix = fname.rsplit(".", 1)[0]
                         json_path = f"{qr_dir}/{prefix}.json"
                         payload = {
                             "file": fname,
-                            "batchId": CERTUS_Batch_ID,
+                            "batchId": batch_id,
                             "qr": texts if len(texts) > 1 else texts[0],
                         }
-                        data_bytes = _json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+                        data_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
+                        # Overwrite if exists
                         try:
                             supabase.storage.from_(BUCKET).remove([json_path])
                         except Exception:
@@ -621,15 +646,19 @@ def view_dashboard():
     else:
         st.info("No CERTUS_Batch_ID available. Activate/Create a batch first.")
 
+            
+
 # ----------------------------------------------------------------------------
 # Router dispatch
 # ----------------------------------------------------------------------------
+
 route = st.session_state["view"]
 if route == "home":
     view_home()
 elif route == "signin":
     view_signin()
-elif route == "dashboard":
+elif route == "dashboard":   # NEW
+    # protect this view
     if st.session_state.get("logged_in"):
         view_dashboard()
     else:
