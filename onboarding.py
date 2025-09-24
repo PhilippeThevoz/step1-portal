@@ -375,9 +375,9 @@ def view_dashboard():
         st.session_state["view"] = "home"
         st.rerun()
 
-    # --- Create CERTUS ---
 # --- Create CERTUS ---
     if create_certus:
+        print("Create CERTUS")
         try:
             # 1) Download CERTUS-Test.json from Supabase bucket
             object_name = "CERTUS-Test.json"
@@ -449,11 +449,10 @@ def view_dashboard():
             
             
 #
-#-------- Add below the API call to download a batch --------
-
-#-------- Add below the API call to download a batch --------
+#-------- API call to download a batch --------
 
     # Only proceed if we have a CERTUS_Batch_ID from the previous step
+    print("Download")
     CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
     if CERTUS_Batch_ID:
         import io, zipfile, mimetypes  # local imports to avoid changing your global header
@@ -525,9 +524,10 @@ def view_dashboard():
         st.info("Create a CERTUS batch first to enable download.")
         
 #
-#--------------- activate the batch
+#--------------- Activate the batch
 
 # Only proceed if we have a CERTUS_Batch_ID
+    print("Activation")
     print("CERTUS_Batch_ID : ",CERTUS_Batch_ID)
     if CERTUS_Batch_ID:
         st.subheader("Activate CERTUS batch")
@@ -565,6 +565,7 @@ def view_dashboard():
 #------ CERTUS QR codes parsing
 
     if CERTUS_Batch_ID:
+        print("QR code parsing")
         import io, json, posixpath
         import numpy as np
         import cv2
