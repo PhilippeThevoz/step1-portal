@@ -428,6 +428,24 @@ def view_dashboard():
                 st.success("CERTUS batch created successfully.")
             else:
                 st.error(f"CERTUS API error: HTTP {resp.status_code}")
+                
+                
+            # --- NEW: store response as `certus_output` and display it ---
+            try:
+                certus_output = resp.json()   # dict/list if JSON
+            except Exception:
+                certus_output = resp.text     # fallback to raw text
+
+            st.subheader("-------- CERTUS API response")
+            if isinstance(certus_output, (dict, list)):
+                st.json(certus_output, expanded=False)
+            else:
+                st.code(certus_output)
+
+            if resp.ok:
+                st.success("-------- CERTUS batch created successfully.")
+            else:
+                st.error(f"CERTUS API error: HTTP {resp.status_code}")
 
         except Exception as e:
             st.error(f"Create CERTUS failed: {e}")
