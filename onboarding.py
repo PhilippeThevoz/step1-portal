@@ -523,6 +523,43 @@ def view_dashboard():
                 st.error(f"Batch download/upload failed: {e}")
     else:
         st.info("Create a CERTUS batch first to enable download.")
+        
+#
+#--------------- activate the batch
+
+# Only proceed if we have a CERTUS_Batch_ID
+    CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
+    if CERTUS_Batch_ID:
+        st.subheader("Activate CERTUS batch")
+        if st.button("Activate batch", use_container_width=True):
+            try:
+                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
+                if not key:
+                    st.error("Missing CERTUS_API_KEY environment/secret value.")
+                    st.stop()
+
+                # API call (as requested)
+                dl_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/activate"
+                headers = {
+                    "accept": "*/*",
+                    "issuer-impersonate": "utopia",
+                    "Authorization": f"Bearer {key}",
+                }
+
+                # Most APIs use POST for activate; fall back to GET if needed
+                resp = requests.post(dl_url, headers=headers, timeout=60)
+                if resp.status_code == 405:  # Method Not Allowed -> try GET
+                    resp = requests.get(dl_url, headers=headers, timeout=60)
+
+                if resp.ok:
+                    st.success("Activation has been successful")
+                else:
+                    st.error(f"Activation failed: HTTP {resp.status_code} — {resp.text}")
+
+            except Exception as e:
+                st.error(f"Activation error: {e}")
+    else:
+        st.info("No CERTUS_Batch_ID available. Create a batch first.")
 
 # ----------------------------------------------------------------------------
 # Router dispatch
