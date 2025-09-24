@@ -539,7 +539,7 @@ def view_dashboard():
                     st.stop()
 
                 # API call (as requested)
-                dl_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/activate"
+                dl_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/activation"
                 headers = {
                     "accept": "application/json",
                     "issuer-impersonate": "utopia",
