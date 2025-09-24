@@ -528,7 +528,7 @@ def view_dashboard():
 #--------------- activate the batch
 
 # Only proceed if we have a CERTUS_Batch_ID
-    CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
+    print("CERTUS_Batch_ID : ",CERTUS_Batch_ID)
     if CERTUS_Batch_ID:
         st.subheader("Activate CERTUS batch")
         if st.button("Activate batch", use_container_width=True):
