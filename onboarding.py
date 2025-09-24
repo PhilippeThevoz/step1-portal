@@ -475,7 +475,7 @@ def view_dashboard():
                 }
 
                 # Call the CERTUS download API (should return a ZIP)
-                r = requests.put(dl_url, headers=headers, timeout=180)
+                r = requests.get(dl_url, headers=headers, timeout=180)
                 if not r.ok:
                     st.error(f"Download API error: HTTP {r.status_code}")
                     st.stop()
@@ -546,8 +546,8 @@ def view_dashboard():
                     "Authorization": f"Bearer {key}",
                 }
 
-                # Most APIs use POST for activate; fall back to GET if needed
-                resp = requests.post(dl_url, headers=headers, timeout=60)
+                # Most APIs use PUT for activate; fall back to GET if needed
+                resp = requests.put(dl_url, headers=headers, timeout=60)
                 if resp.status_code == 405:  # Method Not Allowed -> try GET
                     resp = requests.get(dl_url, headers=headers, timeout=60)
 
