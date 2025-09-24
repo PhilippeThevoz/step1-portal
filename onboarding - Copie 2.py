@@ -449,6 +449,9 @@ def view_dashboard():
 
         except Exception as e:
             st.error(f"Create CERTUS failed: {e}")
+#
+#-------- Add below the API call to download a batch --------
+
 
 
 # ----------------------------------------------------------------------------

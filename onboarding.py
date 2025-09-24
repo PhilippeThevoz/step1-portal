@@ -446,6 +446,83 @@ def view_dashboard():
 
         except Exception as e:
             st.error(f"Create CERTUS failed: {e}")
+            
+            
+#
+#-------- Add below the API call to download a batch --------
+
+#-------- Add below the API call to download a batch --------
+
+    # Only proceed if we have a CERTUS_Batch_ID from the previous step
+    CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
+    if CERTUS_Batch_ID:
+        import io, zipfile, mimetypes  # local imports to avoid changing your global header
+
+        st.subheader("Download CERTUS batch")
+        if st.button("Download batch ZIP & upload to Supabase", use_container_width=True):
+            try:
+                # Build the download request
+                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
+                if not key:
+                    st.error("Missing CERTUS_API_KEY environment/secret value.")
+                    st.stop()
+
+                dl_url = f"https://dm-api.pp.certusdoc.com/api/v1/batches/{CERTUS_Batch_ID}/download"
+                headers = {
+                    "accept": "*/*",
+                    "issuer-impersonate": "utopia",
+                    "Authorization": f"Bearer {key}",
+                }
+
+                # Call the CERTUS download API (should return a ZIP)
+                r = requests.get(dl_url, headers=headers, timeout=180)
+                if not r.ok:
+                    st.error(f"Download API error: HTTP {r.status_code}")
+                    st.stop()
+
+                zip_bytes = r.content
+
+                # Offer the ZIP for direct download in the UI
+                st.download_button(
+                    label="⬇️ Download CERTUS ZIP",
+                    data=zip_bytes,
+                    file_name=f"{CERTUS_Batch_ID}.zip",
+                    mime="application/zip",
+                )
+
+                # Unzip in-memory and upload files to Supabase bucket (Test1)
+                try:
+                    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+                except zipfile.BadZipFile:
+                    st.error("Downloaded file is not a valid ZIP.")
+                    st.stop()
+
+                uploaded = []
+                for member in zf.infolist():
+                    if member.is_dir():
+                        continue
+                    data = zf.read(member)  # bytes of the extracted file
+
+                    # Store under a prefix per batch: Test1/CERTUS/<batch>/...
+                    object_path = f"CERTUS/{CERTUS_Batch_ID}/{member.filename}".replace("\\", "/")
+                    content_type, _ = mimetypes.guess_type(member.filename)
+                    opts = {"contentType": content_type or "application/octet-stream"}
+
+                    # Best-effort remove if it already exists (prevents upsert quirks)
+                    try:
+                        supabase.storage.from_(BUCKET).remove([object_path])
+                    except Exception:
+                        pass
+
+                    supabase.storage.from_(BUCKET).upload(object_path, data, opts)
+                    uploaded.append(object_path)
+
+                st.success(f"Uploaded {len(uploaded)} file(s) to Supabase at '{BUCKET}/CERTUS/{CERTUS_Batch_ID}/'.")
+
+            except Exception as e:
+                st.error(f"Batch download/upload failed: {e}")
+    else:
+        st.info("Create a CERTUS batch first to enable download.")
 
 # ----------------------------------------------------------------------------
 # Router dispatch
