@@ -14,6 +14,14 @@ from clear_fields import clear_fields
 from send_email_with_attachment import send_email_with_attachment
 from send_sms_vonage import send_sms_vonage
 
+# ⬅️ import CERTUS ops from your root-level certus.py
+from certus import (
+    download_batch_zip,
+    upload_zip_to_storage,
+    activate_batch_put_activation,
+    parse_qr_codes_in_storage,
+)
+
 T_CERTUS_PATH = "config/Template-CERTUS-Member.json"
 
 def _slug(label: str) -> str:
@@ -235,63 +243,52 @@ def render(go):
         except Exception as e:
             st.error(f"Save failed: {e}")
 
-    if 'send_email_clicked' in locals() and send_email_clicked:
-        try:
-            json_str = _record_for_email()
-            # find an email-like field
-            to_email = ""
-            for k, v in captured.items():
-                if "email" in k.lower():
-                    to_email = v.strip(); break
-            if not to_email:
-                st.error("No email field found in template or it's empty.")
-            else:
-                attach_name = (filename or "").strip() or f"record_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                if not attach_name.lower().endswith(".json"):
-                    attach_name += ".json"
-                send_email_with_attachment(
-                    smtp_cfg={
-                        "host": st.secrets.get("SMTP_HOST") or os.getenv("SMTP_HOST"),
-                        "port": int(st.secrets.get("SMTP_PORT", os.getenv("SMTP_PORT") or 587)),
-                        "username": st.secrets.get("SMTP_USERNAME") or os.getenv("SMTP_USERNAME"),
-                        "password": st.secrets.get("BLUEWIN_SMTP_PASSWORD") or os.getenv("BLUEWIN_SMTP_PASSWORD"),
-                        "sender_email": st.secrets.get("SENDER_EMAIL") or os.getenv("SENDER_EMAIL"),
-                        "sender_name": st.secrets.get("SENDER_NAME") or os.getenv("SENDER_NAME") or "Your Team",
-                        "use_ssl": str(st.secrets.get("SMTP_SSL") or os.getenv("SMTP_SSL") or "false").lower() == "true",
-                        "use_starttls": str(st.secrets.get("SMTP_STARTTLS") or os.getenv("SMTP_STARTTLS") or "true").lower() == "true",
-                    },
-                    to_email=to_email,
-                    subject="Successful onboarding",
-                    body_text=("Dear Madam/Dear Sir,\nYour on-boarding has been successful.\nPlease find below and enclosed your records.\nBest Regards.\nYour Team\n\n" + json_str + "\n"),
-                    attachment_filename=attach_name,
-                    attachment_bytes=json_str.encode("utf-8"),
-                )
-                st.success(f"Email sent to {to_email}")
-        except Exception as e:
-            st.error(f"Send email failed: {e}")
+    # ------ ✅ Post-creation tools: Download, Activate, QR parse ------
+    batch_id = st.session_state.get("CERTUS_Batch_ID")
+    if batch_id:
+        st.divider()
+        st.subheader("Post-creation actions")
 
-    if 'send_sms_clicked' in locals() and send_sms_clicked:
-        try:
-            to_msisdn = ""
-            for k, v in captured.items():
-                if "mobile" in k.lower() or "phone" in k.lower():
-                    to_msisdn = v.strip(); break
-            if not to_msisdn:
-                st.error("No mobile/phone field found in template or it's empty.")
-            else:
-                api_key    = st.secrets.get("VONAGE_API_KEY")    or os.getenv("VONAGE_API_KEY")
-                api_secret = st.secrets.get("VONAGE_API_SECRET") or os.getenv("VONAGE_API_SECRET")
-                from_id    = st.secrets.get("VONAGE_SMS_FROM")   or os.getenv("VONAGE_SMS_FROM") or "Onboarding"
-                if not api_key or not api_secret:
-                    st.error("Missing VONAGE_API_KEY or VONAGE_API_SECRET in secrets/env.")
+        # Download + upload
+        if st.button("Download batch ZIP & upload to Supabase", use_container_width=True):
+            try:
+                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
+                zip_bytes = download_batch_zip(batch_id, key)
+                st.download_button(
+                    label="⬇️ Download CERTUS ZIP",
+                    data=zip_bytes,
+                    file_name=f"{batch_id}.zip",
+                    mime="application/zip",
+                    key="dl_zip_after_signup",
+                )
+                uploaded = upload_zip_to_storage(get_client(), get_bucket(), batch_id, zip_bytes)
+                st.success(f"Uploaded {len(uploaded)} file(s) to Supabase at 'CERTUS/{batch_id}/'.")
+            except Exception as e:
+                st.error(f"Batch download/upload failed: {e}")
+
+        # Activate
+        if st.button("Activate batch", use_container_width=True):
+            try:
+                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
+                res = activate_batch_put_activation(batch_id, key)
+                if res.get("ok"):
+                    st.success("Activation has been successful")
                 else:
-                    from send_sms_vonage import send_sms_vonage as _send
-                    name_fields = [k for k in captured.keys() if "name" in k.lower()]
-                    msg_text = " ".join([captured[k] for k in name_fields]).strip() if name_fields else "Hello from the onboarding portal"
-                    msg_id = _send(api_key, api_secret, from_id, to_msisdn, msg_text)
-                    st.success(f"SMS queued via Vonage (message-id: {msg_id})")
-        except Exception as e:
-            st.error(f"Send SMS failed: {e}")
+                    st.error(f"Activation failed: HTTP {res.get('status_code')} — {res.get('body')}")
+            except Exception as e:
+                st.error(f"Activation error: {e}")
+
+        # QR extraction
+        if st.button("Parse QR codes", use_container_width=True):
+            try:
+                results = parse_qr_codes_in_storage(get_client(), get_bucket(), batch_id)
+                if results:
+                    st.success(f"Parsed {len(results)} QR PNG file(s) and saved JSON next to them.")
+                    st.json(results, expanded=False)
+                else:
+                    st.info("No QR PNGs found or none decoded.")
+            except Exception as e:
+                st.error(f"QR parsing failed: {e}")
 
     st.divider()
     if st.button("← Back to Home"):
