@@ -88,12 +88,15 @@ def upload_zip_to_storage(supabase, bucket: str, batch_id: str, zip_bytes: bytes
     return uploaded
 
 def parse_qr_codes_in_storage(supabase, bucket: str, batch_id: str):
-    import os
-    os.environ["OPENCV_LOG_LEVEL"] = "ERROR"  # must be set before importing cv2
+    import os as _os
+    _os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
     try:
+        import numpy as np
         import cv2
     except ImportError as e:
         raise ImportError("QR parsing requires OpenCV and NumPy. Install with: pip install opencv-python-headless numpy") from e
+    import os as _os
+    _os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
     qr_dir = f"CERTUS/{batch_id}/QR-code"
     entries = supabase.storage.from_(bucket).list(qr_dir)
     pngs = [e.get("name") for e in entries if isinstance(e, dict) and str(e.get("name","")).lower().endswith(".png")]
