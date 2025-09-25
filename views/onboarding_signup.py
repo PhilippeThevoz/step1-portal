@@ -1,4 +1,5 @@
-import os, json, re, requests
+import os, json, re, requests, smtplib, mimetypes
+from email.message import EmailMessage
 from datetime import datetime
 from collections import OrderedDict
 import streamlit as st
@@ -11,11 +12,11 @@ from services.users import (
     save_single_user_file,
 )
 from clear_fields import clear_fields
-from send_email_with_attachment import send_email_with_attachment
+from send_email_with_attachment import send_email_with_attachment  # still used for the single-file flows if you want
 from send_sms_vonage import send_sms_vonage
 
-# ⬅️ import CERTUS ops from your root-level certus.py
-from services.certus import (
+# CERTUS ops from your root-level certus.py
+from certus import (
     download_batch_zip,
     upload_zip_to_storage,
     activate_batch_put_activation,
@@ -80,7 +81,6 @@ def _build_certus_row_and_id(captured: dict):
     public_key = _ci_get(captured, "Public Key", "public key", "pubkey")
 
     row = [last_name, first_name, birth_date, ghana_id, address, email, mobile, username, public_key]
-    # normalize whitespace
     row = [ (v or "").replace("\n"," ").strip() for v in row ]
     return row, ghana_id
 
@@ -99,25 +99,65 @@ def _merge_certus_template(template_text: str, row_values: list[str], ghana_id: 
     """
     Replace:
       1) <Last Name,First Name,Birth Date,Ghana Card ID Number,Private Address,email,Mobile phone number,username,Public Key>
-         with a JSON snippet of quoted strings: "LN","FN",...
-         so that the surrounding JSON remains valid:
-           "documents":[["1",  <here>  ]]
+         with a JSON snippet of quoted strings (to keep JSON valid):
+         "LN","FN","..."
       2) "<GhanaCardID>" in "name":"<GhanaCardID>" with the actual ghana_id (no extra quotes).
     """
-    # Build JSON snippet for the row (quoted items, comma-separated, no surrounding [ ])
     row_json_inside_array = ",".join(json.dumps(v) for v in row_values)
-
     pattern_row = (
         r"<\s*Last Name\s*,\s*First Name\s*,\s*Birth Date\s*,\s*Ghana Card ID Number\s*,\s*Private Address\s*,\s*email\s*,\s*Mobile phone number\s*,\s*username\s*,\s*Public Key\s*>"
     )
     merged = re.sub(pattern_row, row_json_inside_array, template_text)
 
-    # Replace <GhanaCardID> inside quotes
     pattern_gid = r"<\s*GhanaCardID\s*>"
     merged = re.sub(pattern_gid, ghana_id, merged)
 
-    # Parse final JSON
     return json.loads(merged)
+
+# -------------------- email with multiple attachments --------------------
+def _send_email_with_attachments(to_email: str, subject: str, body_text: str, attachments: list[tuple[str, bytes, str]]):
+    """
+    attachments: list of (filename, data_bytes, content_type)
+    SMTP config loaded from secrets/env (same keys you've used before).
+    """
+    host = st.secrets.get("SMTP_HOST") or os.getenv("SMTP_HOST")
+    port = int(st.secrets.get("SMTP_PORT", os.getenv("SMTP_PORT") or 587))
+    user = st.secrets.get("SMTP_USERNAME") or os.getenv("SMTP_USERNAME")
+    pwd  = st.secrets.get("BLUEWIN_SMTP_PASSWORD") or os.getenv("BLUEWIN_SMTP_PASSWORD")
+    sender = st.secrets.get("SENDER_EMAIL") or os.getenv("SENDER_EMAIL")
+    sender_name = st.secrets.get("SENDER_NAME") or os.getenv("SENDER_NAME") or "Your Team"
+    use_ssl = str(st.secrets.get("SMTP_SSL") or os.getenv("SMTP_SSL") or "false").lower() == "true"
+    use_starttls = str(st.secrets.get("SMTP_STARTTLS") or os.getenv("SMTP_STARTTLS") or "true").lower() == "true"
+
+    if not host or not sender:
+        raise RuntimeError("SMTP is not configured (missing SMTP_HOST or SENDER_EMAIL).")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{sender_name} <{sender}>"
+    msg["To"] = to_email
+    msg.set_content(body_text)
+
+    for filename, data, content_type in attachments:
+        if not content_type:
+            content_type, _ = mimetypes.guess_type(filename)
+        if not content_type:
+            content_type = "application/octet-stream"
+        maintype, subtype = content_type.split("/", 1)
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+
+    if use_ssl:
+        with smtplib.SMTP_SSL(host, port) as s:
+            if user and pwd:
+                s.login(user, pwd)
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port) as s:
+            if use_starttls:
+                s.starttls()
+            if user and pwd:
+                s.login(user, pwd)
+            s.send_message(msg)
 
 # -------------------- main view --------------------
 def render(go):
@@ -146,150 +186,4 @@ def render(go):
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            save_clicked = st.form_submit_button("Save", type="primary")
-        with c2:
-            clear_clicked = st.form_submit_button("Clear all the fields")
-        with c3:
-            send_email_clicked = st.form_submit_button("Send email")
-        with c4:
-            send_sms_clicked = st.form_submit_button("Send SMS")
-
-    # ----- Buttons actions -----
-    if clear_clicked:
-        clear_fields()
-        for label in tmpl.keys():
-            st.session_state.pop(f"dyn_{_slug(label)}", None)
-        st.session_state.pop("dyn_filename", None)
-
-    def _record_for_email():
-        filtered = {k: v for k, v in captured.items() if "password" not in k.lower()}
-        return json.dumps(filtered, ensure_ascii=False, indent=2)
-
-    if save_clicked:
-        try:
-            # 1) Build and save the user record
-            record, username, err = build_dynamic_record_from_inputs(captured)
-            if err:
-                st.error(err)
-                st.stop()
-
-            append_user_record(supabase, bucket, users_object, record)
-            st.success("Saved to Supabase: Users.json")
-
-            filename_clean = (filename or "").strip()
-            if filename_clean:
-                single_path = save_single_user_file(supabase, bucket, filename_clean, record)
-                signed = supabase.storage.from_(bucket).create_signed_url(single_path, 3600)
-                signed_url = signed.get("signedURL") if isinstance(signed, dict) else signed["signedURL"]
-                st.info(f"Saved separate JSON as: {single_path}")
-                st.link_button("⬇️ Download separate JSON (valid 1h)", signed_url)
-
-            # 2) Build certus_content from Template-CERTUS-Member.json using captured data
-            try:
-                template_text = _load_text_from_storage(supabase, bucket, T_CERTUS_PATH)
-            except Exception as te:
-                st.error(f"Could not read CERTUS template from Supabase ({T_CERTUS_PATH}): {te}")
-                st.stop()
-
-            row_values, ghana_id = _build_certus_row_and_id(captured)
-            certus_content = _merge_certus_template(template_text, row_values, ghana_id)
-
-            # (Optional) show what will be sent
-            with st.expander("CERTUS payload preview"):
-                st.json(certus_content, expanded=False)
-
-            # 3) Call CERTUS create batch with this certus_content
-            base = st.secrets.get("CERTUS_API_PATH") or os.getenv("CERTUS_API_PATH")
-            key  = st.secrets.get("CERTUS_API_KEY")  or os.getenv("CERTUS_API_KEY")
-            if not base or not key:
-                st.warning("CERTUS_API_PATH / CERTUS_API_KEY not set; skipping CERTUS batch creation.")
-            else:
-                url = base.rstrip("/") + "/batches/json"
-                headers = {
-                    "accept": "application/json",
-                    "issuer-impersonate": "utopia",
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                }
-                resp = requests.post(url, headers=headers, json=certus_content, timeout=60)
-                try:
-                    certus_output = resp.json()
-                except Exception:
-                    certus_output = resp.text
-
-                st.subheader("CERTUS API response")
-                if resp.ok:
-                    st.success("CERTUS batch created successfully.")
-                    if isinstance(certus_output, (dict, list)):
-                        st.json(certus_output, expanded=False)
-                    else:
-                        st.code(certus_output)
-                    # Extract and store batch id if present
-                    batch_id = ""
-                    try:
-                        payload = certus_output if isinstance(certus_output, dict) else json.loads(certus_output)
-                        if isinstance(payload, dict):
-                            batch_id = payload.get("batchId") or payload.get("batch_id") or ""
-                    except Exception:
-                        pass
-                    if batch_id:
-                        st.info(f"CERTUS_Batch_ID: {batch_id}")
-                        st.session_state["CERTUS_Batch_ID"] = batch_id
-                    st.session_state["certus_output"] = certus_output
-                else:
-                    st.error(f"CERTUS API error: HTTP {resp.status_code}")
-                    st.code(certus_output if isinstance(certus_output, str) else json.dumps(certus_output, indent=2))
-
-        except Exception as e:
-            st.error(f"Save failed: {e}")
-
-    # ------ ✅ Post-creation tools: Download, Activate, QR parse ------
-    batch_id = st.session_state.get("CERTUS_Batch_ID")
-    if batch_id:
-        st.divider()
-        st.subheader("Post-creation actions")
-
-        # Download + upload
-        if st.button("Download batch ZIP & upload to Supabase", use_container_width=True):
-            try:
-                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
-                zip_bytes = download_batch_zip(batch_id, key)
-                st.download_button(
-                    label="⬇️ Download CERTUS ZIP",
-                    data=zip_bytes,
-                    file_name=f"{batch_id}.zip",
-                    mime="application/zip",
-                    key="dl_zip_after_signup",
-                )
-                uploaded = upload_zip_to_storage(get_client(), get_bucket(), batch_id, zip_bytes)
-                st.success(f"Uploaded {len(uploaded)} file(s) to Supabase at 'CERTUS/{batch_id}/'.")
-            except Exception as e:
-                st.error(f"Batch download/upload failed: {e}")
-
-        # Activate
-        if st.button("Activate batch", use_container_width=True):
-            try:
-                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
-                res = activate_batch_put_activation(batch_id, key)
-                if res.get("ok"):
-                    st.success("Activation has been successful")
-                else:
-                    st.error(f"Activation failed: HTTP {res.get('status_code')} — {res.get('body')}")
-            except Exception as e:
-                st.error(f"Activation error: {e}")
-
-        # QR extraction
-        if st.button("Parse QR codes", use_container_width=True):
-            try:
-                results = parse_qr_codes_in_storage(get_client(), get_bucket(), batch_id)
-                if results:
-                    st.success(f"Parsed {len(results)} QR PNG file(s) and saved JSON next to them.")
-                    st.json(results, expanded=False)
-                else:
-                    st.info("No QR PNGs found or none decoded.")
-            except Exception as e:
-                st.error(f"QR parsing failed: {e}")
-
-    st.divider()
-    if st.button("← Back to Home"):
-        go("home")
+            save_clicked = st.form_submit_button("Save", type="prima_
