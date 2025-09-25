@@ -6,7 +6,7 @@ from remove_users_json_if_exists import remove_users_json_if_exists
 from upload_users_json import upload_users_json
 from upload_single_user_json import upload_single_user_json
 
-TEMPLATE_PATH_DEFAULT = "config/Template_onboarding_Member.json"
+TEMPLATE_PATH_DEFAULT = "config/Template-onboarding-Member.json"
 
 def hash_password_sha256(password: str) -> str:
     return hashlib.sha256((password or "").encode("utf-8")).hexdigest()
