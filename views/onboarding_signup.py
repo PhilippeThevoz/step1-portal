@@ -31,7 +31,7 @@ def _render_field(label: str, default: str):
         return st.text_input(label, type="password", key=key, value="")
     return st.text_input(label, key=key, value=default or "")
 
-# ---------- helpers to build CERTUS payload from the captured form ----------
+# -------------------- helpers for CERTUS merge --------------------
 def _ci_get(d: dict, *names: str) -> str:
     """Case-insensitive get across multiple possible labels."""
     # exact first
@@ -47,17 +47,19 @@ def _ci_get(d: dict, *names: str) -> str:
             v = d.get(k)
             return "" if v is None else str(v)
     # fuzzy contains
-    want_tokens = [ (n or "").strip().lower() for n in names if n ]
+    want = [ (n or "").strip().lower() for n in names if n ]
     for k, v in d.items():
         lk = (k or "").strip().lower()
-        if any(tok in lk for tok in want_tokens):
+        if any(tok in lk for tok in want):
             return "" if v is None else str(v)
     return ""
 
-def _build_certus_csv_from_captured(captured: dict) -> str:
-    """Order must be:
-    Last Name, First Name, Birth Date, Ghana Card ID Number, Private Address, email,
-    Mobile phone number, username, Public Key
+def _build_certus_row_and_id(captured: dict):
+    """
+    Returns (row_values_list, ghana_id_str) in the exact order required by your template.
+    Order:
+      Last Name, First Name, Birth Date, Ghana Card ID Number, Private Address,
+      email, Mobile phone number, username, Public Key
     """
     last_name  = _ci_get(captured, "Last Name", "surname", "lastname", "name_last")
     first_name = _ci_get(captured, "First Name", "firstname", "given name", "givenname", "name_first")
@@ -69,9 +71,10 @@ def _build_certus_csv_from_captured(captured: dict) -> str:
     username   = _ci_get(captured, "username", "user name")
     public_key = _ci_get(captured, "Public Key", "public key", "pubkey")
 
-    values = [last_name, first_name, birth_date, ghana_id, address, email, mobile, username, public_key]
-    cleaned = [ (v or "").replace("\n"," ").strip() for v in values ]
-    return ",".join(cleaned)
+    row = [last_name, first_name, birth_date, ghana_id, address, email, mobile, username, public_key]
+    # normalize whitespace
+    row = [ (v or "").replace("\n"," ").strip() for v in row ]
+    return row, ghana_id
 
 def _load_text_from_storage(supabase, bucket: str, path: str) -> str:
     blob = supabase.storage.from_(bucket).download(path)
@@ -84,20 +87,31 @@ def _load_text_from_storage(supabase, bucket: str, path: str) -> str:
     except Exception:
         return str(blob)
 
-def _merge_certus_template(template_text: str, csv_values: str):
+def _merge_certus_template(template_text: str, row_values: list[str], ghana_id: str) -> dict:
     """
-    Replace the placeholder:
-    <Last Name,First Name,Birth Date,Ghana Card ID Number,Private Address,email,Mobile phone number,username,Public Key>
-    with csv_values. Then parse JSON to produce certus_content.
+    Replace:
+      1) <Last Name,First Name,Birth Date,Ghana Card ID Number,Private Address,email,Mobile phone number,username,Public Key>
+         with a JSON snippet of quoted strings: "LN","FN",...
+         so that the surrounding JSON remains valid:
+           "documents":[["1",  <here>  ]]
+      2) "<GhanaCardID>" in "name":"<GhanaCardID>" with the actual ghana_id (no extra quotes).
     """
-    pattern = r"<\s*Last Name\s*,\s*First Name\s*,\s*Birth Date\s*,\s*Ghana Card ID Number\s*,\s*Private Address\s*,\s*email\s*,\s*Mobile phone number\s*,\s*username\s*,\s*Public Key\s*>"
-    merged = re.sub(pattern, csv_values, template_text)
-    try:
-        return json.loads(merged)  # template is expected to be JSON
-    except Exception:
-        # fallback: minimal JSON payload
-        return {"payload": csv_values}
+    # Build JSON snippet for the row (quoted items, comma-separated, no surrounding [ ])
+    row_json_inside_array = ",".join(json.dumps(v) for v in row_values)
 
+    pattern_row = (
+        r"<\s*Last Name\s*,\s*First Name\s*,\s*Birth Date\s*,\s*Ghana Card ID Number\s*,\s*Private Address\s*,\s*email\s*,\s*Mobile phone number\s*,\s*username\s*,\s*Public Key\s*>"
+    )
+    merged = re.sub(pattern_row, row_json_inside_array, template_text)
+
+    # Replace <GhanaCardID> inside quotes
+    pattern_gid = r"<\s*GhanaCardID\s*>"
+    merged = re.sub(pattern_gid, ghana_id, merged)
+
+    # Parse final JSON
+    return json.loads(merged)
+
+# -------------------- main view --------------------
 def render(go):
     st.title("on-boarding (dynamic template)")
     st.caption("Fields are generated from Supabase: Test1/config/Template_onboarding_Member.json")
@@ -145,7 +159,7 @@ def render(go):
 
     if save_clicked:
         try:
-            # 1) Build and save the user record (with password hashing handled inside)
+            # 1) Build and save the user record
             record, username, err = build_dynamic_record_from_inputs(captured)
             if err:
                 st.error(err)
@@ -162,21 +176,23 @@ def render(go):
                 st.info(f"Saved separate JSON as: {single_path}")
                 st.link_button("⬇️ Download separate JSON (valid 1h)", signed_url)
 
-            # 2) NEW: Build certus_content from Template-CERTUS-Member.json using captured data
+            # 2) Build certus_content from Template-CERTUS-Member.json using captured data
             try:
                 template_text = _load_text_from_storage(supabase, bucket, T_CERTUS_PATH)
             except Exception as te:
                 st.error(f"Could not read CERTUS template from Supabase ({T_CERTUS_PATH}): {te}")
                 st.stop()
 
-            csv_values = _build_certus_csv_from_captured(captured)
-            certus_content = _merge_certus_template(template_text, csv_values)
+            row_values, ghana_id = _build_certus_row_and_id(captured)
+            certus_content = _merge_certus_template(template_text, row_values, ghana_id)
+
+            # (Optional) show what will be sent
+            with st.expander("CERTUS payload preview"):
+                st.json(certus_content, expanded=False)
 
             # 3) Call CERTUS create batch with this certus_content
             base = st.secrets.get("CERTUS_API_PATH") or os.getenv("CERTUS_API_PATH")
             key  = st.secrets.get("CERTUS_API_KEY")  or os.getenv("CERTUS_API_KEY")
-            
-            print("certus_content : ",certus_content)
             if not base or not key:
                 st.warning("CERTUS_API_PATH / CERTUS_API_KEY not set; skipping CERTUS batch creation.")
             else:
@@ -193,14 +209,13 @@ def render(go):
                 except Exception:
                     certus_output = resp.text
 
+                st.subheader("CERTUS API response")
                 if resp.ok:
                     st.success("CERTUS batch created successfully.")
-                    st.subheader("CERTUS API response")
                     if isinstance(certus_output, (dict, list)):
                         st.json(certus_output, expanded=False)
                     else:
                         st.code(certus_output)
-
                     # Extract and store batch id if present
                     batch_id = ""
                     try:
@@ -209,7 +224,6 @@ def render(go):
                             batch_id = payload.get("batchId") or payload.get("batch_id") or ""
                     except Exception:
                         pass
-
                     if batch_id:
                         st.info(f"CERTUS_Batch_ID: {batch_id}")
                         st.session_state["CERTUS_Batch_ID"] = batch_id
