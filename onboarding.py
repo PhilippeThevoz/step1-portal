@@ -549,6 +549,8 @@ def view_dashboard():
     CERTUS_Batch_ID = st.session_state.get("CERTUS_Batch_ID")
     if CERTUS_Batch_ID:
         import io, json as _json, posixpath
+        import os
+        os.environ["OPENCV_LOG_LEVEL"] = "ERROR"  # must be set before importing cv2
 
         try:
             import numpy as np
