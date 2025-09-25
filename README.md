@@ -1,26 +1,9 @@
-# Test Web Platform (Streamlit + Supabase)
+# Test Web Platform – Modular Refactor (v2)
 
-Sign-up with password hashing, Sign-in with 2FA (email or SMS via Vonage), and basic user file storage.
+Run:
+  pip install -r requirements.txt
+  streamlit run app.py
 
-## Setup
+Configure `.streamlit/secrets.toml` from `.streamlit/secrets.example.toml`.
 
-1. **Python env**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Secrets**  
-   Copy `.streamlit/secrets.example.toml` to `.streamlit/secrets.toml` and fill values:
-   - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-   - SMTP vars for email
-   - Vonage vars for SMS
-
-3. **Run**
-   ```bash
-   streamlit run onboarding.py
-   ```
-
-## Notes
-- Users are stored in Supabase **Storage** as JSON at `bucket/object` (defaults `Test1/Users.json`).
-- Passwords are stored **only as SHA-256** hashes.
-- 2FA sends a 4-digit code by email or SMS, then verifies it.
+Place your existing helper modules (send_plain_email.py, send_email_with_attachment.py, send_sms_vonage.py, download_users_json.py, load_users_as_list.py, remove_users_json_if_exists.py, upload_users_json.py, upload_single_user_json.py, clear_fields.py, exit_app.py) next to `app.py`.
