@@ -16,7 +16,7 @@ from send_email_with_attachment import send_email_with_attachment  # still used 
 from send_sms_vonage import send_sms_vonage
 
 # CERTUS ops from your root-level certus.py
-from certus import (
+from services.certus import (
     download_batch_zip,
     upload_zip_to_storage,
     activate_batch_put_activation,
