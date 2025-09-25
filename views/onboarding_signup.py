@@ -186,4 +186,229 @@ def render(go):
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            save_clicked = st.form_submit_button("Save", type="prima_
+            save_clicked = st.form_submit_button("Save", type="primary")
+        with c2:
+            clear_clicked = st.form_submit_button("Clear all the fields")
+        with c3:
+            send_email_clicked = st.form_submit_button("Send email")
+        with c4:
+            send_sms_clicked = st.form_submit_button("Send SMS")
+
+    # ----- Buttons actions -----
+    if clear_clicked:
+        clear_fields()
+        for label in tmpl.keys():
+            st.session_state.pop(f"dyn_{_slug(label)}", None)
+        st.session_state.pop("dyn_filename", None)
+
+    def _record_for_email():
+        filtered = {k: v for k, v in captured.items() if "password" not in k.lower()}
+        return json.dumps(filtered, ensure_ascii=False, indent=2)
+
+    if save_clicked:
+        try:
+            # 1) Build and save the user record
+            record, username, err = build_dynamic_record_from_inputs(captured)
+            if err:
+                st.error(err)
+                st.stop()
+
+            append_user_record(supabase, bucket, users_object, record)
+            st.success("Saved to Supabase: Users.json")
+
+            # store for later email after QR parsing
+            st.session_state["onboarding_captured"] = captured
+
+            filename_clean = (filename or "").strip()
+            if filename_clean:
+                single_path = save_single_user_file(supabase, bucket, filename_clean, record)
+                signed = supabase.storage.from_(bucket).create_signed_url(single_path, 3600)
+                signed_url = signed.get("signedURL") if isinstance(signed, dict) else signed["signedURL"]
+                st.info(f"Saved separate JSON as: {single_path}")
+                st.link_button("⬇️ Download separate JSON (valid 1h)", signed_url)
+
+            # 2) Build certus_content from Template-CERTUS-Member.json using captured data
+            try:
+                template_text = _load_text_from_storage(supabase, bucket, T_CERTUS_PATH)
+            except Exception as te:
+                st.error(f"Could not read CERTUS template from Supabase ({T_CERTUS_PATH}): {te}")
+                st.stop()
+
+            row_values, ghana_id = _build_certus_row_and_id(captured)
+            certus_content = _merge_certus_template(template_text, row_values, ghana_id)
+
+            with st.expander("CERTUS payload preview"):
+                st.json(certus_content, expanded=False)
+
+            # 3) Call CERTUS create batch with this certus_content
+            base = st.secrets.get("CERTUS_API_PATH") or os.getenv("CERTUS_API_PATH")
+            key  = st.secrets.get("CERTUS_API_KEY")  or os.getenv("CERTUS_API_KEY")
+            if not base or not key:
+                st.warning("CERTUS_API_PATH / CERTUS_API_KEY not set; skipping CERTUS batch creation.")
+            else:
+                url = base.rstrip("/") + "/batches/json"
+                headers = {
+                    "accept": "application/json",
+                    "issuer-impersonate": "utopia",
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                }
+                resp = requests.post(url, headers=headers, json=certus_content, timeout=60)
+                try:
+                    certus_output = resp.json()
+                except Exception:
+                    certus_output = resp.text
+
+                st.subheader("CERTUS API response")
+                if resp.ok:
+                    st.success("CERTUS batch created successfully.")
+                    if isinstance(certus_output, (dict, list)):
+                        st.json(certus_output, expanded=False)
+                    else:
+                        st.code(certus_output)
+                    # Extract and store batch id if present
+                    batch_id = ""
+                    try:
+                        payload = certus_output if isinstance(certus_output, dict) else json.loads(certus_output)
+                        if isinstance(payload, dict):
+                            batch_id = payload.get("batchId") or payload.get("batch_id") or ""
+                    except Exception:
+                        pass
+                    if batch_id:
+                        st.info(f"CERTUS_Batch_ID: {batch_id}")
+                        st.session_state["CERTUS_Batch_ID"] = batch_id
+                    st.session_state["certus_output"] = certus_output
+                else:
+                    st.error(f"CERTUS API error: HTTP {resp.status_code}")
+                    st.code(certus_output if isinstance(certus_output, str) else json.dumps(certus_output, indent=2))
+
+        except Exception as e:
+            st.error(f"Save failed: {e}")
+
+    # ------ Post-creation tools: Download, Activate, QR parse ------
+    batch_id = st.session_state.get("CERTUS_Batch_ID")
+    if batch_id:
+        st.divider()
+        st.subheader("Post-creation actions")
+
+        # Download + upload
+        if st.button("Download batch ZIP & upload to Supabase", use_container_width=True):
+            try:
+                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
+                zip_bytes = download_batch_zip(batch_id, key)
+                st.download_button(
+                    label="⬇️ Download CERTUS ZIP",
+                    data=zip_bytes,
+                    file_name=f"{batch_id}.zip",
+                    mime="application/zip",
+                    key="dl_zip_after_signup",
+                )
+                uploaded = upload_zip_to_storage(get_client(), get_bucket(), batch_id, zip_bytes)
+                st.success(f"Uploaded {len(uploaded)} file(s) to Supabase at 'CERTUS/{batch_id}/'.")
+            except Exception as e:
+                st.error(f"Batch download/upload failed: {e}")
+
+        # Activate
+        if st.button("Activate batch", use_container_width=True):
+            try:
+                key = st.secrets.get("CERTUS_API_KEY") or os.getenv("CERTUS_API_KEY")
+                res = activate_batch_put_activation(batch_id, key)
+                if res.get("ok"):
+                    st.success("Activation has been successful")
+                else:
+                    st.error(f"Activation failed: HTTP {res.get('status_code')} — {res.get('body')}")
+            except Exception as e:
+                st.error(f"Activation error: {e}")
+
+        # QR extraction + email with 1.png + 1.json
+        if st.button("Parse QR codes (and email 1.png + 1.json)", use_container_width=True):
+            try:
+                results = parse_qr_codes_in_storage(get_client(), get_bucket(), batch_id)
+                if results:
+                    st.success(f"Parsed {len(results)} QR PNG file(s) and saved JSON next to them.")
+                    st.json(results, expanded=False)
+                else:
+                    st.info("No QR PNGs found or none decoded.")
+                    return
+
+                # ---- Send email with attachments
+                supabase = get_client()
+                bucket = get_bucket()
+
+                # Prefer 1.png / 1.json, else first result
+                prefer_png_path = f"CERTUS/{batch_id}/QR-code/1.png"
+                prefer_json_path = f"CERTUS/{batch_id}/QR-code/1.json"
+
+                def _download(path: str) -> bytes | None:
+                    try:
+                        blob = supabase.storage.from_(bucket).download(path)
+                        if isinstance(blob, dict) and "data" in blob:
+                            blob = blob["data"]
+                        return blob if isinstance(blob, (bytes, bytearray)) else None
+                    except Exception:
+                        return None
+
+                png_bytes = _download(prefer_png_path)
+                json_bytes = _download(prefer_json_path)
+
+                chosen_png_name = "1.png"
+                chosen_json_name = "1.json"
+
+                if png_bytes is None or json_bytes is None:
+                    # fallback to first parsed entry
+                    first = results[0]
+                    first_png = first.get("png")
+                    first_json = first.get("json")
+                    if first_png:
+                        path_png = f"CERTUS/{batch_id}/QR-code/{first_png}"
+                        png_bytes = _download(path_png)
+                        chosen_png_name = first_png or chosen_png_name
+                    if first_json:
+                        path_json = f"CERTUS/{batch_id}/QR-code/{first_json}"
+                        json_bytes = _download(path_json)
+                        chosen_json_name = first_json or chosen_json_name
+
+                # Find recipient email from session-stored capture
+                captured = st.session_state.get("onboarding_captured") or {}
+                to_email = ""
+                for k, v in captured.items():
+                    if "email" in (k or "").lower():
+                        to_email = (v or "").strip()
+                        break
+                if not to_email:
+                    st.error("Cannot send email: no onboarding email address was captured.")
+                else:
+                    if png_bytes is None or json_bytes is None:
+                        st.warning("Could not locate both 1.png and 1.json (or first parsed pair). Sending what is available.")
+                    attachments = []
+                    if png_bytes is not None:
+                        attachments.append((chosen_png_name, png_bytes, "image/png"))
+                    if json_bytes is not None:
+                        attachments.append((chosen_json_name, json_bytes, "application/json"))
+
+                    if attachments:
+                        body = (
+                            "Dear Madam/Dear Sir,\n\n"
+                            "Your on-boarding has been successful.\n"
+                            "Please find attached your CERTUS QR code and its parsed JSON.\n\n"
+                            f"Batch: {batch_id}\n\n"
+                            "Best Regards,\nYour Team"
+                        )
+                        try:
+                            _send_email_with_attachments(
+                                to_email=to_email,
+                                subject="Your CERTUS QR code",
+                                body_text=body,
+                                attachments=attachments,
+                            )
+                            st.success(f"E-mail sent to {to_email} with {len(attachments)} attachment(s).")
+                        except Exception as e:
+                            st.error(f"Sending e-mail failed: {e}")
+                    else:
+                        st.error("No attachments found to send.")
+            except Exception as e:
+                st.error(f"QR parsing failed: {e}")
+
+    st.divider()
+    if st.button("← Back to Home"):
+        go("home")
